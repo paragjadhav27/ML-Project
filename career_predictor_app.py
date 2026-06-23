@@ -121,6 +121,7 @@ st.markdown("""
         padding: 12px 16px;
         text-align: center;
         border: 1px solid rgba(255,255,255,0.1);
+        margin-bottom: 8px;
     }
     
     .metric-val {
@@ -281,33 +282,51 @@ ROLE_ICONS = {
     'Web Developer': '🌐',
 }
 
+MODEL_OPTIONS = [
+    "Random Forest",
+    "XGBoost",
+    "SVM (RBF Kernel)",
+    "SVM (Linear Kernel)",
+    "LightGBM",
+    "CatBoost",
+    "Ensemble (All Models)",
+]
+
+# Models that support predict_proba
+PROBA_MODELS = {"Random Forest", "XGBoost", "LightGBM", "CatBoost"}
+
 
 # ─── Model loading ────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_models():
-    rf = joblib.load("best_random_forest_model.joblib")
-    xgb = joblib.load("best_xgboost_model.joblib")
-    return rf, xgb
+    models = {
+        "Random Forest":       joblib.load("tuned_random_forest_model.joblib"),
+        "XGBoost":             joblib.load("tuned_xgboost_model.joblib"),
+        "SVM (RBF Kernel)":    joblib.load("svm_rbf_kernel_model.joblib"),
+        "SVM (Linear Kernel)": joblib.load("svm_linear_model.joblib"),
+        "LightGBM":            joblib.load("lightgbm_model.joblib"),
+        "CatBoost":            joblib.load("catboost_model.joblib"),
+    }
+    return models
 
 
-# ─── Feature engineering (mirrors training pipeline) ─────────────────────────
-def build_feature_vector(inputs: dict, feature_names: list) -> pd.DataFrame:
-    """Recreate the exact 99-feature vector the models expect."""
-    
-    # Binary label encoding for yes/no columns
-    binary_map = {"yes": 1, "no": 0}
+# ─── Feature vector builders ─────────────────────────────────────────────────
+
+def _build_base_row(inputs: dict) -> tuple[dict, int, int, int, int]:
+    """Build the shared 89-feature base row (spaces as separators)."""
+    binary_map     = {"yes": 1, "no": 0}
     skill_level_map = {"poor": 0, "medium": 1, "excellent": 2}
-    
+
     row = {}
 
-    # Directly label-encoded columns
-    row["self-learning capability?"] = binary_map[inputs["self_learning"]]
-    row["Extra-courses did"]          = binary_map[inputs["extra_courses"]]
-    row["reading and writing skills"] = skill_level_map[inputs["rw_skills"]]
-    row["memory capability score"]    = skill_level_map[inputs["memory"]]
+    # Scalar encoded fields
+    row["self-learning capability?"]           = binary_map[inputs["self_learning"]]
+    row["Extra-courses did"]                   = binary_map[inputs["extra_courses"]]
+    row["reading and writing skills"]          = skill_level_map[inputs["rw_skills"]]
+    row["memory capability score"]             = skill_level_map[inputs["memory"]]
     row["Taken inputs from seniors or elders"] = binary_map[inputs["senior_inputs"]]
-    row["worked in teams ever?"]      = binary_map[inputs["team_work"]]
-    row["Introvert"]                  = binary_map[inputs["introvert"]]
+    row["worked in teams ever?"]               = binary_map[inputs["team_work"]]
+    row["Introvert"]                           = binary_map[inputs["introvert"]]
 
     # One-hot: certifications
     for val in ['app development', 'distro making', 'full stack', 'hadoop',
@@ -357,46 +376,105 @@ def build_feature_vector(inputs: dict, feature_names: list) -> pd.DataFrame:
     row["hard/smart worker_smart worker"] = 1 if inputs["work_style"] == "smart worker" else 0
 
     # Numeric
-    lq  = inputs["logical_quotient"]
-    hk  = inputs["hackathons"]
-    cs  = inputs["coding_skills"]
-    ps  = inputs["public_speaking"]
+    lq = inputs["logical_quotient"]
+    hk = inputs["hackathons"]
+    cs = inputs["coding_skills"]
+    ps = inputs["public_speaking"]
 
     row["Logical quotient rating"] = lq
     row["hackathons"]              = hk
     row["coding skills rating"]    = cs
     row["public speaking points"]  = ps
 
-    # Polynomial features (degree-2 interactions)
-    row["Logical quotient rating^2"]                  = lq ** 2
-    row["Logical quotient rating hackathons"]          = lq * hk
-    row["Logical quotient rating coding skills rating"]= lq * cs
-    row["Logical quotient rating public speaking points"] = lq * ps
-    row["hackathons^2"]                               = hk ** 2
-    row["hackathons coding skills rating"]            = hk * cs
-    row["hackathons public speaking points"]          = hk * ps
-    row["coding skills rating^2"]                     = cs ** 2
-    row["coding skills rating public speaking points"]= cs * ps
-    row["public speaking points^2"]                   = ps ** 2
+    return row, lq, hk, cs, ps
+
+
+def build_feature_vector_rf(inputs: dict, feature_names: list) -> pd.DataFrame:
+    """99-feature vector for Random Forest (includes polynomial interactions)."""
+    row, lq, hk, cs, ps = _build_base_row(inputs)
+
+    # Polynomial degree-2 interaction terms
+    row["Logical quotient rating^2"]                     = lq ** 2
+    row["Logical quotient rating hackathons"]            = lq * hk
+    row["Logical quotient rating coding skills rating"]  = lq * cs
+    row["Logical quotient rating public speaking points"]= lq * ps
+    row["hackathons^2"]                                  = hk ** 2
+    row["hackathons coding skills rating"]               = hk * cs
+    row["hackathons public speaking points"]             = hk * ps
+    row["coding skills rating^2"]                        = cs ** 2
+    row["coding skills rating public speaking points"]   = cs * ps
+    row["public speaking points^2"]                      = ps ** 2
 
     df = pd.DataFrame([row])
-    # Reorder to match training feature order
-    df = df[feature_names]
-    return df
+    return df[feature_names]
+
+
+def build_feature_vector_standard(inputs: dict, feature_names: list) -> pd.DataFrame:
+    """89-feature vector for XGBoost, SVM (RBF/Linear), CatBoost (space-separated names)."""
+    row, _, _, _, _ = _build_base_row(inputs)
+    df = pd.DataFrame([row])
+    return df[feature_names]
+
+
+def build_feature_vector_lgbm(inputs: dict, feature_names: list) -> pd.DataFrame:
+    """89-feature vector for LightGBM (underscore-separated names)."""
+    row, _, _, _, _ = _build_base_row(inputs)
+
+    # Rename keys: replace spaces with underscores to match LightGBM training names
+    lgbm_row = {k.replace(" ", "_"): v for k, v in row.items()}
+
+    df = pd.DataFrame([lgbm_row])
+    return df[feature_names]
+
+
+def predict_single(model, model_name: str, inputs: dict):
+    """
+    Returns (predicted_class_index, confidence_0_to_1, proba_array_or_None).
+
+    - Models with predict_proba: returns full probability array.
+    - SVM models (no probability): uses decision_function, softmax-normalises
+      the scores to approximate a probability distribution for the UI.
+    """
+    # Build the correct feature vector
+    if model_name == "Random Forest":
+        X = build_feature_vector_rf(inputs, model.feature_names_in_.tolist())
+    elif model_name == "LightGBM":
+        X = build_feature_vector_lgbm(inputs, model.feature_names_in_.tolist())
+    elif model_name == "CatBoost":
+        # CatBoost uses feature_names_ (not feature_names_in_)
+        feat_names = model.feature_names_
+        X = build_feature_vector_standard(inputs, feat_names)
+    else:
+        # XGBoost, SVM RBF, SVM Linear
+        X = build_feature_vector_standard(inputs, model.feature_names_in_.tolist())
+
+    if model_name in PROBA_MODELS:
+        proba = model.predict_proba(X)[0]
+        pred  = int(np.argmax(proba))
+        conf  = float(proba[pred])
+        return pred, conf, proba
+    else:
+        # SVM: use decision_function scores; softmax to get pseudo-probabilities
+        scores = model.decision_function(X)[0]
+        # Softmax normalisation
+        e = np.exp(scores - scores.max())
+        proba = e / e.sum()
+        pred  = int(np.argmax(proba))
+        conf  = float(proba[pred])
+        return pred, conf, proba
 
 
 # ─── App layout ──────────────────────────────────────────────────────────────
 def main():
-    rf_model, xgb_model = load_models()
-    feature_names = rf_model.feature_names_in_.tolist()
+    models = load_models()
 
     # Sidebar — model selector
     with st.sidebar:
         st.markdown('<p class="section-label">⚡ Configuration</p>', unsafe_allow_html=True)
         model_choice = st.radio(
             "Choose prediction model",
-            ["Random Forest", "XGBoost", "Ensemble (Both)"],
-            index=2,
+            MODEL_OPTIONS,
+            index=6,  # Default: Ensemble
         )
         st.markdown("---")
         st.markdown('<p class="section-label">ℹ️ About</p>', unsafe_allow_html=True)
@@ -404,6 +482,14 @@ def main():
             "<p style='font-size:0.82rem; color:rgba(255,255,255,0.5);'>"
             "This app uses machine learning models trained on career survey data "
             "to suggest your best-fit job role and relevant learning resources."
+            "</p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("---")
+        st.markdown('<p class="section-label">🤖 Models</p>', unsafe_allow_html=True)
+        st.markdown(
+            "<p style='font-size:0.78rem; color:rgba(255,255,255,0.45);'>"
+            "Random Forest · XGBoost · SVM (RBF) · SVM (Linear) · LightGBM · CatBoost"
             "</p>",
             unsafe_allow_html=True,
         )
@@ -420,7 +506,6 @@ def main():
     col_left, col_right = st.columns([1, 1], gap="large")
 
     with col_left:
-        # --- Numeric Skills ---
         st.markdown('<p class="section-label">📊 Skills & Ratings</p>', unsafe_allow_html=True)
         with st.container():
             logical_quotient = st.slider("Logical Quotient Rating", 1, 9, 5)
@@ -470,11 +555,11 @@ def main():
         work_style = st.radio("Work Style", ["hard worker", "smart worker"], horizontal=True)
 
         st.markdown('<p class="section-label" style="margin-top:20px;">🧩 Personal Traits</p>', unsafe_allow_html=True)
-        self_learning  = st.radio("Self-Learning Capability?", ["yes", "no"], horizontal=True)
-        extra_courses  = st.radio("Completed Extra Courses?",  ["yes", "no"], horizontal=True)
-        senior_inputs  = st.radio("Taken Inputs from Seniors?", ["yes", "no"], horizontal=True)
-        team_work      = st.radio("Worked in Teams?", ["yes", "no"], horizontal=True)
-        introvert      = st.radio("Are You an Introvert?", ["yes", "no"], horizontal=True)
+        self_learning = st.radio("Self-Learning Capability?", ["yes", "no"], horizontal=True)
+        extra_courses = st.radio("Completed Extra Courses?",  ["yes", "no"], horizontal=True)
+        senior_inputs = st.radio("Taken Inputs from Seniors?", ["yes", "no"], horizontal=True)
+        team_work     = st.radio("Worked in Teams?", ["yes", "no"], horizontal=True)
+        introvert     = st.radio("Are You an Introvert?", ["yes", "no"], horizontal=True)
 
         st.markdown('<p class="section-label" style="margin-top:20px;">📖 Reading Preference</p>', unsafe_allow_html=True)
         books = st.selectbox("Favourite Type of Books", [
@@ -516,36 +601,29 @@ def main():
             books=books,
         )
 
-        X = build_feature_vector(inputs, feature_names)
+        # Run all 6 models
+        results = {}
+        for name, mdl in models.items():
+            pred, conf, proba = predict_single(mdl, name, inputs)
+            results[name] = {"pred": pred, "conf": conf, "proba": proba, "role": JOB_ROLES[pred]}
 
-        # Predictions
-        rf_pred   = rf_model.predict(X)[0]
-        rf_proba  = rf_model.predict_proba(X)[0]
-        xgb_pred  = xgb_model.predict(X)[0]
-        xgb_proba = xgb_model.predict_proba(X)[0]
+        # Ensemble = average probabilities across all models
+        all_probas = np.array([results[n]["proba"] for n in models])
+        avg_proba  = all_probas.mean(axis=0)
+        ens_pred   = int(np.argmax(avg_proba))
+        ens_conf   = float(avg_proba[ens_pred])
+        ens_role   = JOB_ROLES[ens_pred]
 
-        rf_role   = JOB_ROLES[rf_pred]
-        xgb_role  = JOB_ROLES[xgb_pred]
-
-        # Ensemble = average probabilities
-        avg_proba   = (rf_proba + xgb_proba) / 2
-        ens_pred    = int(np.argmax(avg_proba))
-        ens_conf    = float(avg_proba[ens_pred])
-        ens_role    = JOB_ROLES[ens_pred]
-
-        # Choose final role based on model_choice
-        if model_choice == "Random Forest":
-            final_role = rf_role
-            final_conf = float(rf_proba[rf_pred])
-            model_label = "Random Forest"
-        elif model_choice == "XGBoost":
-            final_role = xgb_role
-            final_conf = float(xgb_proba[xgb_pred])
-            model_label = "XGBoost"
+        # Choose final result
+        if model_choice == "Ensemble (All Models)":
+            final_role  = ens_role
+            final_conf  = ens_conf
+            model_label = "Ensemble (6 Models)"
         else:
-            final_role = ens_role
-            final_conf = ens_conf
-            model_label = "Ensemble (RF + XGBoost)"
+            r           = results[model_choice]
+            final_role  = r["role"]
+            final_conf  = r["conf"]
+            model_label = model_choice
 
         icon = ROLE_ICONS.get(final_role, "🎯")
 
@@ -572,41 +650,45 @@ def main():
             )
 
         with meta_col:
-            st.markdown('<p class="section-label">📊 Model Breakdown</p>', unsafe_allow_html=True)
-            m1, m2 = st.columns(2)
-            with m1:
-                rf_c = float(rf_proba[rf_pred])
-                st.markdown(
-                    f'<div class="metric-pill">'
-                    f'<div class="metric-val">{rf_c*100:.0f}%</div>'
-                    f'<div class="metric-lbl">Random Forest</div>'
-                    f'<div style="font-size:0.75rem; color:#c4b5fd; margin-top:4px;">{ROLE_ICONS.get(rf_role,"")} {rf_role}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            with m2:
-                xgb_c = float(xgb_proba[xgb_pred])
-                st.markdown(
-                    f'<div class="metric-pill">'
-                    f'<div class="metric-val">{xgb_c*100:.0f}%</div>'
-                    f'<div class="metric-lbl">XGBoost</div>'
-                    f'<div style="font-size:0.75rem; color:#c4b5fd; margin-top:4px;">{ROLE_ICONS.get(xgb_role,"")} {xgb_role}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+            st.markdown('<p class="section-label">📊 All Models Breakdown</p>', unsafe_allow_html=True)
+
+            model_display_order = [
+                ("Random Forest", "RF"),
+                ("XGBoost",       "XGB"),
+                ("LightGBM",      "LGBM"),
+                ("CatBoost",      "CatBoost"),
+                ("SVM (RBF Kernel)",    "SVM-RBF"),
+                ("SVM (Linear Kernel)", "SVM-Lin"),
+            ]
+
+            col_a, col_b = st.columns(2)
+            for i, (name, short) in enumerate(model_display_order):
+                r = results[name]
+                note = "~ approx" if "SVM" in name else ""
+                target_col = col_a if i % 2 == 0 else col_b
+                with target_col:
+                    st.markdown(
+                        f'<div class="metric-pill">'
+                        f'<div class="metric-val">{r["conf"]*100:.0f}%</div>'
+                        f'<div class="metric-lbl">{short} {note}</div>'
+                        f'<div style="font-size:0.72rem; color:#c4b5fd; margin-top:4px;">'
+                        f'{ROLE_ICONS.get(r["role"], "")} {r["role"]}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
 
             # Top-3 from ensemble
             st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown('<p class="section-label">🔝 Top Alternatives</p>', unsafe_allow_html=True)
+            st.markdown('<p class="section-label">🔝 Top Alternatives (Ensemble)</p>', unsafe_allow_html=True)
             top3_idx = np.argsort(avg_proba)[::-1][:3]
             for rank, idx in enumerate(top3_idx, 1):
-                role = JOB_ROLES[idx]
-                prob = avg_proba[idx]
+                role  = JOB_ROLES[idx]
+                prob  = avg_proba[idx]
                 bar_w = int(prob * 100)
                 st.markdown(
                     f'<div style="margin-bottom:8px;">'
                     f'<div style="display:flex;justify-content:space-between;font-size:0.8rem;color:rgba(255,255,255,0.7);">'
-                    f'<span>{ROLE_ICONS.get(role,"")} {role}</span>'
+                    f'<span>{ROLE_ICONS.get(role, "")} {role}</span>'
                     f'<span style="color:#a78bfa;font-weight:700;">{prob*100:.1f}%</span></div>'
                     f'<div class="conf-bar-bg"><div class="conf-bar-fill" style="width:{bar_w}%;"></div></div>'
                     f'</div>',
