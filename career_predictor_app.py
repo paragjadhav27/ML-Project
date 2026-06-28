@@ -507,7 +507,7 @@ def main():
         model_choice = st.radio(
             "Choose prediction model",
             MODEL_OPTIONS,
-            index=6,
+            index=4,  # Default: Ensemble (All Models)
         )
         st.markdown("---")
         st.markdown('<p class="section-label">ℹ️ About</p>', unsafe_allow_html=True)
