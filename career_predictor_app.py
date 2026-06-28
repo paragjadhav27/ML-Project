@@ -285,7 +285,7 @@ ROLE_ICONS = {
 MODEL_OPTIONS = [
     "Random Forest",
     "XGBoost",
-    "SVM (RBF Kernel)",
+    "SVM (Best)",
     "SVM (Linear Kernel)",
     "LightGBM",
     "CatBoost",
@@ -300,9 +300,9 @@ PROBA_MODELS = {"Random Forest", "XGBoost", "LightGBM", "CatBoost"}
 @st.cache_resource
 def load_models():
     models = {
-        "Random Forest":       joblib.load("tuned_random_forest_model.joblib"),
-        "XGBoost":             joblib.load("tuned_xgboost_model.joblib"),
-        "SVM (RBF Kernel)":    joblib.load("svm_rbf_kernel_model.joblib"),
+        "Random Forest":       joblib.load("best_random_forest_model.joblib"),
+        "XGBoost":             joblib.load("best_xgboost_model.joblib"),
+        "SVM (Best)":          joblib.load("best_svm_model.joblib"),
         "SVM (Linear Kernel)": joblib.load("svm_linear_model.joblib"),
         "LightGBM":            joblib.load("lightgbm_model.joblib"),
         "CatBoost":            joblib.load("catboost_model.joblib"),
@@ -389,28 +389,8 @@ def _build_base_row(inputs: dict) -> tuple[dict, int, int, int, int]:
     return row, lq, hk, cs, ps
 
 
-def build_feature_vector_rf(inputs: dict, feature_names: list) -> pd.DataFrame:
-    """99-feature vector for Random Forest (includes polynomial interactions)."""
-    row, lq, hk, cs, ps = _build_base_row(inputs)
-
-    # Polynomial degree-2 interaction terms
-    row["Logical quotient rating^2"]                     = lq ** 2
-    row["Logical quotient rating hackathons"]            = lq * hk
-    row["Logical quotient rating coding skills rating"]  = lq * cs
-    row["Logical quotient rating public speaking points"]= lq * ps
-    row["hackathons^2"]                                  = hk ** 2
-    row["hackathons coding skills rating"]               = hk * cs
-    row["hackathons public speaking points"]             = hk * ps
-    row["coding skills rating^2"]                        = cs ** 2
-    row["coding skills rating public speaking points"]   = cs * ps
-    row["public speaking points^2"]                      = ps ** 2
-
-    df = pd.DataFrame([row])
-    return df[feature_names]
-
-
 def build_feature_vector_standard(inputs: dict, feature_names: list) -> pd.DataFrame:
-    """89-feature vector for XGBoost, SVM (RBF/Linear), CatBoost (space-separated names)."""
+    """89-feature vector for RF, XGBoost, SVM (Best/Linear), CatBoost (space-separated names)."""
     row, _, _, _, _ = _build_base_row(inputs)
     df = pd.DataFrame([row])
     return df[feature_names]
@@ -436,16 +416,13 @@ def predict_single(model, model_name: str, inputs: dict):
       the scores to approximate a probability distribution for the UI.
     """
     # Build the correct feature vector
-    if model_name == "Random Forest":
-        X = build_feature_vector_rf(inputs, model.feature_names_in_.tolist())
-    elif model_name == "LightGBM":
+    if model_name == "LightGBM":
         X = build_feature_vector_lgbm(inputs, model.feature_names_in_.tolist())
     elif model_name == "CatBoost":
-        # CatBoost uses feature_names_ (not feature_names_in_)
         feat_names = model.feature_names_
         X = build_feature_vector_standard(inputs, feat_names)
     else:
-        # XGBoost, SVM RBF, SVM Linear
+        # Random Forest, XGBoost, SVM (Best), SVM (Linear Kernel)
         X = build_feature_vector_standard(inputs, model.feature_names_in_.tolist())
 
     if model_name in PROBA_MODELS:
@@ -489,7 +466,7 @@ def main():
         st.markdown('<p class="section-label">🤖 Models</p>', unsafe_allow_html=True)
         st.markdown(
             "<p style='font-size:0.78rem; color:rgba(255,255,255,0.45);'>"
-            "Random Forest · XGBoost · SVM (RBF) · SVM (Linear) · LightGBM · CatBoost"
+            "Random Forest · XGBoost · SVM (Best) · SVM (Linear) · LightGBM · CatBoost"
             "</p>",
             unsafe_allow_html=True,
         )
@@ -653,11 +630,11 @@ def main():
             st.markdown('<p class="section-label">📊 All Models Breakdown</p>', unsafe_allow_html=True)
 
             model_display_order = [
-                ("Random Forest", "RF"),
-                ("XGBoost",       "XGB"),
-                ("LightGBM",      "LGBM"),
-                ("CatBoost",      "CatBoost"),
-                ("SVM (RBF Kernel)",    "SVM-RBF"),
+                ("Random Forest",       "RF"),
+                ("XGBoost",             "XGB"),
+                ("LightGBM",            "LGBM"),
+                ("CatBoost",            "CatBoost"),
+                ("SVM (Best)",          "SVM-Best"),
                 ("SVM (Linear Kernel)", "SVM-Lin"),
             ]
 
