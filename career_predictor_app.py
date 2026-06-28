@@ -441,9 +441,87 @@ def predict_single(model, model_name: str, inputs: dict):
         return pred, conf, proba
 
 
+# ─── Step wizard helpers ─────────────────────────────────────────────────────
+
+STEP_META = [
+    {"title": "Skills & Ratings + Abilities",          "icon": "📊", "step": 1},
+    {"title": "Learning Profile + Career Preferences", "icon": "📚", "step": 2},
+    {"title": "Personal Traits + Reading Preference",  "icon": "🧩", "step": 3},
+]
+
+def render_progress(current_step: int):
+    """Render a 3-step progress bar at the top of the form."""
+    labels = [m["icon"] + " " + m["title"] for m in STEP_META]
+    cols = st.columns(3)
+    for i, (col, label) in enumerate(zip(cols, labels)):
+        step_num = i + 1
+        if step_num < current_step:
+            colour = "#34d399"   # completed — green
+            txt_col = "#34d399"
+            dot = "✓"
+        elif step_num == current_step:
+            colour = "#a78bfa"   # active — purple
+            txt_col = "#e2e8f0"
+            dot = str(step_num)
+        else:
+            colour = "rgba(255,255,255,0.15)"  # future — dim
+            txt_col = "rgba(255,255,255,0.35)"
+            dot = str(step_num)
+
+        with col:
+            st.markdown(
+                f"""
+                <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;
+                            border-radius:12px;border:1.5px solid {colour};
+                            background:{'rgba(167,139,250,0.1)' if step_num==current_step else 'transparent'};">
+                    <div style="width:28px;height:28px;border-radius:50%;background:{colour};
+                                display:flex;align-items:center;justify-content:center;
+                                font-size:0.8rem;font-weight:800;color:#0f0c29;flex-shrink:0;">
+                        {dot}
+                    </div>
+                    <span style="font-size:0.78rem;font-weight:600;color:{txt_col};line-height:1.3;">
+                        {label}
+                    </span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    st.markdown("<br>", unsafe_allow_html=True)
+
+
+def nav_buttons(step: int, can_next: bool = True):
+    """Render Back / Next (or Predict) buttons and return (back_clicked, next_clicked)."""
+    total = len(STEP_META)
+    bcol, _, ncol = st.columns([1, 2, 1])
+    back = False
+    nxt  = False
+    with bcol:
+        if step > 1:
+            back = st.button("← Back", key=f"back_{step}")
+    with ncol:
+        label = "🔍  Predict My Career Path" if step == total else "Next →"
+        nxt = st.button(label, key=f"next_{step}", disabled=not can_next)
+    return back, nxt
+
+
+def validation_error(msg: str):
+    st.markdown(
+        f'<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.5);'
+        f'border-radius:10px;padding:12px 16px;color:#fca5a5;font-size:0.88rem;margin-top:8px;">'
+        f'⚠️ {msg}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ─── App layout ──────────────────────────────────────────────────────────────
 def main():
     models = load_models()
+
+    # ── Session-state init ────────────────────────────────────────────────────
+    if "wizard_step" not in st.session_state:
+        st.session_state.wizard_step = 1
+    if "answers" not in st.session_state:
+        st.session_state.answers = {}
 
     # Sidebar — model selector
     with st.sidebar:
@@ -451,7 +529,7 @@ def main():
         model_choice = st.radio(
             "Choose prediction model",
             MODEL_OPTIONS,
-            index=6,  # Default: Ensemble
+            index=6,
         )
         st.markdown("---")
         st.markdown('<p class="section-label">ℹ️ About</p>', unsafe_allow_html=True)
@@ -474,124 +552,28 @@ def main():
     # Hero
     st.markdown(
         '<div class="hero-title">Career Path Predictor 🎯</div>'
-        '<p class="hero-sub">Fill in your profile below and discover which tech role suits you best.</p>',
+        '<p class="hero-sub">Answer a few questions and discover which tech role suits you best.</p>',
         unsafe_allow_html=True,
     )
     st.markdown("<hr class='custom'>", unsafe_allow_html=True)
 
-    # ── Two-column form layout ────────────────────────────────────────────────
-    col_left, col_right = st.columns([1, 1], gap="large")
+    step = st.session_state.wizard_step
 
-    with col_left:
-        st.markdown('<p class="section-label">📊 Skills & Ratings</p>', unsafe_allow_html=True)
-        with st.container():
-            logical_quotient = st.slider("Logical Quotient Rating", 1, 9, 5)
-            hackathons        = st.slider("Hackathons Participated", 0, 6, 2)
-            coding_skills     = st.slider("Coding Skills Rating", 1, 9, 5)
-            public_speaking   = st.slider("Public Speaking Points", 1, 9, 4)
+    # ── Completed — show results ──────────────────────────────────────────────
+    if step == 4:
+        inputs = st.session_state.answers
 
-        st.markdown('<p class="section-label" style="margin-top:20px;">🧠 Abilities</p>', unsafe_allow_html=True)
-        rw_skills = st.select_slider(
-            "Reading & Writing Skills",
-            options=["poor", "medium", "excellent"], value="medium"
-        )
-        memory = st.select_slider(
-            "Memory Capability Score",
-            options=["poor", "medium", "excellent"], value="medium"
-        )
-
-        st.markdown('<p class="section-label" style="margin-top:20px;">📚 Learning Profile</p>', unsafe_allow_html=True)
-        certifications = st.selectbox("Certification Area", [
-            'app development', 'distro making', 'full stack', 'hadoop',
-            'information security', 'machine learning', 'python',
-            'r programming', 'shell programming'
-        ])
-        workshops = st.selectbox("Workshop Attended", [
-            'cloud computing', 'data science', 'database security',
-            'game development', 'hacking', 'system designing',
-            'testing', 'web technologies'
-        ])
-        interested_subjects = st.selectbox("Interested Subject", [
-            'Computer Architecture', 'IOT', 'Management', 'Software Engineering',
-            'cloud computing', 'data engineering', 'hacking', 'networks',
-            'parallel computing', 'programming'
-        ])
-
-    with col_right:
-        st.markdown('<p class="section-label">🏢 Career Preferences</p>', unsafe_allow_html=True)
-        career_area = st.selectbox("Interested Career Area", [
-            'Business process analyst', 'cloud computing', 'developer',
-            'security', 'system developer', 'testing'
-        ])
-        company_type = st.selectbox("Preferred Company Type", [
-            'BPA', 'Cloud Services', 'Finance', 'Product based', 'SAaS services',
-            'Sales and Marketing', 'Service Based',
-            'Testing and Maintainance Services', 'Web Services', 'product development'
-        ])
-        mgmt_tech  = st.radio("Orientation", ["Management", "Technical"], horizontal=True)
-        work_style = st.radio("Work Style", ["hard worker", "smart worker"], horizontal=True)
-
-        st.markdown('<p class="section-label" style="margin-top:20px;">🧩 Personal Traits</p>', unsafe_allow_html=True)
-        self_learning = st.radio("Self-Learning Capability?", ["yes", "no"], horizontal=True)
-        extra_courses = st.radio("Completed Extra Courses?",  ["yes", "no"], horizontal=True)
-        senior_inputs = st.radio("Taken Inputs from Seniors?", ["yes", "no"], horizontal=True)
-        team_work     = st.radio("Worked in Teams?", ["yes", "no"], horizontal=True)
-        introvert     = st.radio("Are You an Introvert?", ["yes", "no"], horizontal=True)
-
-        st.markdown('<p class="section-label" style="margin-top:20px;">📖 Reading Preference</p>', unsafe_allow_html=True)
-        books = st.selectbox("Favourite Type of Books", [
-            'Action and Adventure', 'Anthology', 'Art', 'Autobiographies', 'Biographies',
-            'Childrens', 'Comics', 'Cookbooks', 'Diaries', 'Dictionaries', 'Drama',
-            'Encyclopedias', 'Fantasy', 'Guide', 'Health', 'History', 'Horror',
-            'Journals', 'Math', 'Mystery', 'Poetry', 'Prayer books',
-            'Religion-Spirituality', 'Romance', 'Satire', 'Science',
-            'Science fiction', 'Self help', 'Series', 'Travel', 'Trilogy'
-        ])
-
-    # ── Predict button ────────────────────────────────────────────────────────
-    st.markdown("<br>", unsafe_allow_html=True)
-    predict_col, _ = st.columns([1, 2])
-    with predict_col:
-        predict_clicked = st.button("🔍  Predict My Career Path")
-
-    # ── Results ───────────────────────────────────────────────────────────────
-    if predict_clicked:
-        inputs = dict(
-            logical_quotient=logical_quotient,
-            hackathons=hackathons,
-            coding_skills=coding_skills,
-            public_speaking=public_speaking,
-            rw_skills=rw_skills,
-            memory=memory,
-            certifications=certifications,
-            workshops=workshops,
-            interested_subjects=interested_subjects,
-            career_area=career_area,
-            company_type=company_type,
-            mgmt_tech=mgmt_tech,
-            work_style=work_style,
-            self_learning=self_learning,
-            extra_courses=extra_courses,
-            senior_inputs=senior_inputs,
-            team_work=team_work,
-            introvert=introvert,
-            books=books,
-        )
-
-        # Run all 6 models
         results = {}
         for name, mdl in models.items():
             pred, conf, proba = predict_single(mdl, name, inputs)
             results[name] = {"pred": pred, "conf": conf, "proba": proba, "role": JOB_ROLES[pred]}
 
-        # Ensemble = average probabilities across all models
         all_probas = np.array([results[n]["proba"] for n in models])
         avg_proba  = all_probas.mean(axis=0)
         ens_pred   = int(np.argmax(avg_proba))
         ens_conf   = float(avg_proba[ens_pred])
         ens_role   = JOB_ROLES[ens_pred]
 
-        # Choose final result
         if model_choice == "Ensemble (All Models)":
             final_role  = ens_role
             final_conf  = ens_conf
@@ -604,7 +586,6 @@ def main():
 
         icon = ROLE_ICONS.get(final_role, "🎯")
 
-        st.markdown("<hr class='custom'>", unsafe_allow_html=True)
         st.markdown('<p class="section-label">🏆 Prediction Result</p>', unsafe_allow_html=True)
 
         res_col, meta_col = st.columns([3, 2], gap="large")
@@ -628,7 +609,6 @@ def main():
 
         with meta_col:
             st.markdown('<p class="section-label">📊 All Models Breakdown</p>', unsafe_allow_html=True)
-
             model_display_order = [
                 ("Random Forest",       "RF"),
                 ("XGBoost",             "XGB"),
@@ -637,7 +617,6 @@ def main():
                 ("SVM (Best)",          "SVM-Best"),
                 ("SVM (Linear Kernel)", "SVM-Lin"),
             ]
-
             col_a, col_b = st.columns(2)
             for i, (name, short) in enumerate(model_display_order):
                 r = results[name]
@@ -654,7 +633,6 @@ def main():
                         unsafe_allow_html=True,
                     )
 
-            # Top-3 from ensemble
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown('<p class="section-label">🔝 Top Alternatives (Ensemble)</p>', unsafe_allow_html=True)
             top3_idx = np.argsort(avg_proba)[::-1][:3]
@@ -672,19 +650,301 @@ def main():
                     unsafe_allow_html=True,
                 )
 
-        # ── Recommended Courses ───────────────────────────────────────────────
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown('<p class="section-label">🎓 Recommended Courses for You</p>', unsafe_allow_html=True)
-
         courses = COURSE_RECOMMENDATIONS.get(final_role, [])
         c1, c2, c3 = st.columns(3)
-        cols = [c1, c2, c3]
+        cols_c = [c1, c2, c3]
         for i, (title, desc) in enumerate(courses):
-            with cols[i % 3]:
+            with cols_c[i % 3]:
                 st.markdown(
                     f'<div class="course-card"><strong>📘 {title}</strong>{desc}</div>',
                     unsafe_allow_html=True,
                 )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄  Start Over"):
+            st.session_state.wizard_step = 1
+            st.session_state.answers = {}
+            st.rerun()
+        return
+
+    # ── Progress bar ─────────────────────────────────────────────────────────
+    render_progress(step)
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # STEP 1 — Skills & Ratings  +  Abilities
+    # ═════════════════════════════════════════════════════════════════════════
+    if step == 1:
+        col_l, col_r = st.columns(2, gap="large")
+
+        with col_l:
+            st.markdown('<p class="section-label">📊 Skills & Ratings</p>', unsafe_allow_html=True)
+            logical_quotient = st.slider(
+                "Logical Quotient Rating", 0, 9,
+                st.session_state.answers.get("logical_quotient", 0)
+            )
+            hackathons = st.slider(
+                "Hackathons Participated", 0, 6,
+                st.session_state.answers.get("hackathons", 0)
+            )
+            coding_skills = st.slider(
+                "Coding Skills Rating", 0, 9,
+                st.session_state.answers.get("coding_skills", 0)
+            )
+            public_speaking = st.slider(
+                "Public Speaking Points", 0, 9,
+                st.session_state.answers.get("public_speaking", 0)
+            )
+
+        with col_r:
+            st.markdown('<p class="section-label">🧠 Abilities</p>', unsafe_allow_html=True)
+            rw_skills = st.select_slider(
+                "Reading & Writing Skills",
+                options=["poor", "medium", "excellent"],
+                value=st.session_state.answers.get("rw_skills", "poor"),
+            )
+            memory = st.select_slider(
+                "Memory Capability Score",
+                options=["poor", "medium", "excellent"],
+                value=st.session_state.answers.get("memory", "poor"),
+            )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        back, nxt = nav_buttons(step=1, can_next=True)
+
+        if nxt:
+            st.session_state.answers.update(
+                logical_quotient=logical_quotient,
+                hackathons=hackathons,
+                coding_skills=coding_skills,
+                public_speaking=public_speaking,
+                rw_skills=rw_skills,
+                memory=memory,
+            )
+            st.session_state.wizard_step = 2
+            st.rerun()
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # STEP 2 — Learning Profile  +  Career Preferences
+    # ═════════════════════════════════════════════════════════════════════════
+    elif step == 2:
+        col_l, col_r = st.columns(2, gap="large")
+
+        with col_l:
+            st.markdown('<p class="section-label">📚 Learning Profile</p>', unsafe_allow_html=True)
+
+            cert_opts = [
+                'app development', 'distro making', 'full stack', 'hadoop',
+                'information security', 'machine learning', 'python',
+                'r programming', 'shell programming'
+            ]
+            certifications = st.selectbox(
+                "Certification Area",
+                options=["— select —"] + cert_opts,
+                index=(["— select —"] + cert_opts).index(
+                    st.session_state.answers.get("certifications", "— select —")
+                ),
+            )
+
+            workshop_opts = [
+                'cloud computing', 'data science', 'database security',
+                'game development', 'hacking', 'system designing',
+                'testing', 'web technologies'
+            ]
+            workshops = st.selectbox(
+                "Workshop Attended",
+                options=["— select —"] + workshop_opts,
+                index=(["— select —"] + workshop_opts).index(
+                    st.session_state.answers.get("workshops", "— select —")
+                ),
+            )
+
+            subject_opts = [
+                'Computer Architecture', 'IOT', 'Management', 'Software Engineering',
+                'cloud computing', 'data engineering', 'hacking', 'networks',
+                'parallel computing', 'programming'
+            ]
+            interested_subjects = st.selectbox(
+                "Interested Subject",
+                options=["— select —"] + subject_opts,
+                index=(["— select —"] + subject_opts).index(
+                    st.session_state.answers.get("interested_subjects", "— select —")
+                ),
+            )
+
+        with col_r:
+            st.markdown('<p class="section-label">🏢 Career Preferences</p>', unsafe_allow_html=True)
+
+            career_opts = [
+                'Business process analyst', 'cloud computing', 'developer',
+                'security', 'system developer', 'testing'
+            ]
+            career_area = st.selectbox(
+                "Interested Career Area",
+                options=["— select —"] + career_opts,
+                index=(["— select —"] + career_opts).index(
+                    st.session_state.answers.get("career_area", "— select —")
+                ),
+            )
+
+            company_opts = [
+                'BPA', 'Cloud Services', 'Finance', 'Product based', 'SAaS services',
+                'Sales and Marketing', 'Service Based',
+                'Testing and Maintainance Services', 'Web Services', 'product development'
+            ]
+            company_type = st.selectbox(
+                "Preferred Company Type",
+                options=["— select —"] + company_opts,
+                index=(["— select —"] + company_opts).index(
+                    st.session_state.answers.get("company_type", "— select —")
+                ),
+            )
+
+            mgmt_tech = st.radio(
+                "Orientation",
+                options=["— select —", "Management", "Technical"],
+                index=["— select —", "Management", "Technical"].index(
+                    st.session_state.answers.get("mgmt_tech", "— select —")
+                ),
+                horizontal=True,
+            )
+
+            work_style = st.radio(
+                "Work Style",
+                options=["— select —", "hard worker", "smart worker"],
+                index=["— select —", "hard worker", "smart worker"].index(
+                    st.session_state.answers.get("work_style", "— select —")
+                ),
+                horizontal=True,
+            )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Validate
+        errors_2 = []
+        if certifications      == "— select —": errors_2.append("Certification Area")
+        if workshops           == "— select —": errors_2.append("Workshop Attended")
+        if interested_subjects == "— select —": errors_2.append("Interested Subject")
+        if career_area         == "— select —": errors_2.append("Interested Career Area")
+        if company_type        == "— select —": errors_2.append("Preferred Company Type")
+        if mgmt_tech           == "— select —": errors_2.append("Orientation")
+        if work_style          == "— select —": errors_2.append("Work Style")
+
+        back, nxt = nav_buttons(step=2, can_next=True)
+
+        if back:
+            st.session_state.wizard_step = 1
+            st.rerun()
+
+        if nxt:
+            if errors_2:
+                validation_error("Please answer all questions before continuing: " + ", ".join(errors_2))
+            else:
+                st.session_state.answers.update(
+                    certifications=certifications,
+                    workshops=workshops,
+                    interested_subjects=interested_subjects,
+                    career_area=career_area,
+                    company_type=company_type,
+                    mgmt_tech=mgmt_tech,
+                    work_style=work_style,
+                )
+                st.session_state.wizard_step = 3
+                st.rerun()
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # STEP 3 — Personal Traits  +  Reading Preference
+    # ═════════════════════════════════════════════════════════════════════════
+    elif step == 3:
+        col_l, col_r = st.columns(2, gap="large")
+
+        yn_opts = ["— select —", "yes", "no"]
+
+        with col_l:
+            st.markdown('<p class="section-label">🧩 Personal Traits</p>', unsafe_allow_html=True)
+
+            self_learning = st.radio(
+                "Self-Learning Capability?",
+                options=yn_opts,
+                index=yn_opts.index(st.session_state.answers.get("self_learning", "— select —")),
+                horizontal=True,
+            )
+            extra_courses = st.radio(
+                "Completed Extra Courses?",
+                options=yn_opts,
+                index=yn_opts.index(st.session_state.answers.get("extra_courses", "— select —")),
+                horizontal=True,
+            )
+            senior_inputs = st.radio(
+                "Taken Inputs from Seniors?",
+                options=yn_opts,
+                index=yn_opts.index(st.session_state.answers.get("senior_inputs", "— select —")),
+                horizontal=True,
+            )
+            team_work = st.radio(
+                "Worked in Teams?",
+                options=yn_opts,
+                index=yn_opts.index(st.session_state.answers.get("team_work", "— select —")),
+                horizontal=True,
+            )
+            introvert = st.radio(
+                "Are You an Introvert?",
+                options=yn_opts,
+                index=yn_opts.index(st.session_state.answers.get("introvert", "— select —")),
+                horizontal=True,
+            )
+
+        with col_r:
+            st.markdown('<p class="section-label">📖 Reading Preference</p>', unsafe_allow_html=True)
+
+            book_opts = [
+                'Action and Adventure', 'Anthology', 'Art', 'Autobiographies', 'Biographies',
+                'Childrens', 'Comics', 'Cookbooks', 'Diaries', 'Dictionaries', 'Drama',
+                'Encyclopedias', 'Fantasy', 'Guide', 'Health', 'History', 'Horror',
+                'Journals', 'Math', 'Mystery', 'Poetry', 'Prayer books',
+                'Religion-Spirituality', 'Romance', 'Satire', 'Science',
+                'Science fiction', 'Self help', 'Series', 'Travel', 'Trilogy'
+            ]
+            books = st.selectbox(
+                "Favourite Type of Books",
+                options=["— select —"] + book_opts,
+                index=(["— select —"] + book_opts).index(
+                    st.session_state.answers.get("books", "— select —")
+                ),
+            )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Validate
+        errors_3 = []
+        if self_learning == "— select —": errors_3.append("Self-Learning Capability")
+        if extra_courses == "— select —": errors_3.append("Completed Extra Courses")
+        if senior_inputs == "— select —": errors_3.append("Taken Inputs from Seniors")
+        if team_work     == "— select —": errors_3.append("Worked in Teams")
+        if introvert     == "— select —": errors_3.append("Are You an Introvert")
+        if books         == "— select —": errors_3.append("Favourite Type of Books")
+
+        back, nxt = nav_buttons(step=3, can_next=True)
+
+        if back:
+            st.session_state.wizard_step = 2
+            st.rerun()
+
+        if nxt:
+            if errors_3:
+                validation_error("Please answer all questions before predicting: " + ", ".join(errors_3))
+            else:
+                st.session_state.answers.update(
+                    self_learning=self_learning,
+                    extra_courses=extra_courses,
+                    senior_inputs=senior_inputs,
+                    team_work=team_work,
+                    introvert=introvert,
+                    books=books,
+                )
+                st.session_state.wizard_step = 4
+                st.rerun()
 
 
 if __name__ == "__main__":
