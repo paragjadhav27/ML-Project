@@ -285,14 +285,12 @@ ROLE_ICONS = {
 MODEL_OPTIONS = [
     "Random Forest",
     "XGBoost",
-    "SVM (Best)",
-    "SVM (Linear Kernel)",
     "LightGBM",
     "CatBoost",
     "Ensemble (All Models)",
 ]
 
-# Models that support predict_proba
+# Models that support predict_proba (all remaining models do)
 PROBA_MODELS = {"Random Forest", "XGBoost", "LightGBM", "CatBoost"}
 
 
@@ -300,12 +298,10 @@ PROBA_MODELS = {"Random Forest", "XGBoost", "LightGBM", "CatBoost"}
 @st.cache_resource
 def load_models():
     models = {
-        "Random Forest":       joblib.load("best_random_forest_model.joblib"),
-        "XGBoost":             joblib.load("best_xgboost_model.joblib"),
-        "SVM (Best)":          joblib.load("best_svm_model.joblib"),
-        "SVM (Linear Kernel)": joblib.load("svm_linear_model.joblib"),
-        "LightGBM":            joblib.load("lightgbm_model.joblib"),
-        "CatBoost":            joblib.load("catboost_model.joblib"),
+        "Random Forest": joblib.load("best_random_forest_model.joblib"),
+        "XGBoost":       joblib.load("best_xgboost_model.joblib"),
+        "LightGBM":      joblib.load("lightgbm_model.joblib"),
+        "CatBoost":      joblib.load("catboost_model.joblib"),
     }
     return models
 
@@ -390,7 +386,7 @@ def _build_base_row(inputs: dict) -> tuple[dict, int, int, int, int]:
 
 
 def build_feature_vector_standard(inputs: dict, feature_names: list) -> pd.DataFrame:
-    """89-feature vector for RF, XGBoost, SVM (Best/Linear), CatBoost (space-separated names)."""
+    """89-feature vector for RF, XGBoost, CatBoost (space-separated names)."""
     row, _, _, _, _ = _build_base_row(inputs)
     df = pd.DataFrame([row])
     return df[feature_names]
@@ -408,37 +404,19 @@ def build_feature_vector_lgbm(inputs: dict, feature_names: list) -> pd.DataFrame
 
 
 def predict_single(model, model_name: str, inputs: dict):
-    """
-    Returns (predicted_class_index, confidence_0_to_1, proba_array_or_None).
-
-    - Models with predict_proba: returns full probability array.
-    - SVM models (no probability): uses decision_function, softmax-normalises
-      the scores to approximate a probability distribution for the UI.
-    """
-    # Build the correct feature vector
+    """Returns (predicted_class_index, confidence_0_to_1, proba_array)."""
     if model_name == "LightGBM":
         X = build_feature_vector_lgbm(inputs, model.feature_names_in_.tolist())
     elif model_name == "CatBoost":
-        feat_names = model.feature_names_
-        X = build_feature_vector_standard(inputs, feat_names)
+        X = build_feature_vector_standard(inputs, model.feature_names_)
     else:
-        # Random Forest, XGBoost, SVM (Best), SVM (Linear Kernel)
+        # Random Forest, XGBoost
         X = build_feature_vector_standard(inputs, model.feature_names_in_.tolist())
 
-    if model_name in PROBA_MODELS:
-        proba = model.predict_proba(X)[0]
-        pred  = int(np.argmax(proba))
-        conf  = float(proba[pred])
-        return pred, conf, proba
-    else:
-        # SVM: use decision_function scores; softmax to get pseudo-probabilities
-        scores = model.decision_function(X)[0]
-        # Softmax normalisation
-        e = np.exp(scores - scores.max())
-        proba = e / e.sum()
-        pred  = int(np.argmax(proba))
-        conf  = float(proba[pred])
-        return pred, conf, proba
+    proba = model.predict_proba(X)[0]
+    pred  = int(np.argmax(proba))
+    conf  = float(proba[pred])
+    return pred, conf, proba
 
 
 # ─── Step wizard helpers ─────────────────────────────────────────────────────
@@ -544,7 +522,7 @@ def main():
         st.markdown('<p class="section-label">🤖 Models</p>', unsafe_allow_html=True)
         st.markdown(
             "<p style='font-size:0.78rem; color:rgba(255,255,255,0.45);'>"
-            "Random Forest · XGBoost · SVM (Best) · SVM (Linear) · LightGBM · CatBoost"
+            "Random Forest · XGBoost · LightGBM · CatBoost"
             "</p>",
             unsafe_allow_html=True,
         )
@@ -574,15 +552,20 @@ def main():
         ens_conf   = float(avg_proba[ens_pred])
         ens_role   = JOB_ROLES[ens_pred]
 
+        # For ensemble: also find which single model has the highest confidence
+        best_model_name = max(results, key=lambda n: results[n]["conf"])
+        best_model_r    = results[best_model_name]
+
         if model_choice == "Ensemble (All Models)":
             final_role  = ens_role
             final_conf  = ens_conf
-            model_label = "Ensemble (6 Models)"
+            model_label = "Ensemble (4 Models)"
+            show_best_model_callout = True
         else:
-            r           = results[model_choice]
-            final_role  = r["role"]
-            final_conf  = r["conf"]
+            final_role  = results[model_choice]["role"]
+            final_conf  = results[model_choice]["conf"]
             model_label = model_choice
+            show_best_model_callout = False
 
         icon = ROLE_ICONS.get(final_role, "🎯")
 
@@ -607,26 +590,57 @@ def main():
                 unsafe_allow_html=True,
             )
 
+            # Best single model callout — only shown for Ensemble mode
+            if show_best_model_callout:
+                bm_icon = ROLE_ICONS.get(best_model_r["role"], "🎯")
+                st.markdown(
+                    f"""
+                    <div style="margin-top:14px;background:rgba(52,211,153,0.1);
+                                border:1px solid rgba(52,211,153,0.35);border-radius:14px;
+                                padding:16px 20px;">
+                        <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.1em;
+                                    text-transform:uppercase;color:#34d399;margin-bottom:6px;">
+                            ⭐ Best Single Model
+                        </div>
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <span style="font-size:1.6rem;">{bm_icon}</span>
+                            <div>
+                                <div style="font-size:1rem;font-weight:700;color:#e2e8f0;">
+                                    {best_model_r["role"]}
+                                </div>
+                                <div style="font-size:0.8rem;color:rgba(255,255,255,0.5);">
+                                    {best_model_name} &nbsp;·&nbsp;
+                                    <span style="color:#6ee7b7;font-weight:700;">
+                                        {best_model_r["conf"]*100:.1f}% confidence
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
         with meta_col:
             st.markdown('<p class="section-label">📊 All Models Breakdown</p>', unsafe_allow_html=True)
             model_display_order = [
-                ("Random Forest",       "RF"),
-                ("XGBoost",             "XGB"),
-                ("LightGBM",            "LGBM"),
-                ("CatBoost",            "CatBoost"),
-                ("SVM (Best)",          "SVM-Best"),
-                ("SVM (Linear Kernel)", "SVM-Lin"),
+                ("Random Forest", "RF"),
+                ("XGBoost",       "XGB"),
+                ("LightGBM",      "LGBM"),
+                ("CatBoost",      "CB"),
             ]
             col_a, col_b = st.columns(2)
             for i, (name, short) in enumerate(model_display_order):
                 r = results[name]
-                note = "~ approx" if "SVM" in name else ""
+                is_best = (name == best_model_name)
+                border  = "rgba(52,211,153,0.6)" if is_best else "rgba(255,255,255,0.1)"
                 target_col = col_a if i % 2 == 0 else col_b
                 with target_col:
                     st.markdown(
-                        f'<div class="metric-pill">'
+                        f'<div class="metric-pill" style="border-color:{border};">'
+                        f'{"<div style=\'font-size:0.6rem;color:#34d399;font-weight:700;margin-bottom:2px;\'>⭐ BEST</div>" if is_best else ""}'
                         f'<div class="metric-val">{r["conf"]*100:.0f}%</div>'
-                        f'<div class="metric-lbl">{short} {note}</div>'
+                        f'<div class="metric-lbl">{short}</div>'
                         f'<div style="font-size:0.72rem; color:#c4b5fd; margin-top:4px;">'
                         f'{ROLE_ICONS.get(r["role"], "")} {r["role"]}</div>'
                         f'</div>',
@@ -803,20 +817,22 @@ def main():
 
             mgmt_tech = st.radio(
                 "Orientation",
-                options=["— select —", "Management", "Technical"],
-                index=["— select —", "Management", "Technical"].index(
-                    st.session_state.answers.get("mgmt_tech", "— select —")
-                ),
+                options=["Management", "Technical"],
+                index=(["Management", "Technical"].index(st.session_state.answers["mgmt_tech"])
+                       if st.session_state.answers.get("mgmt_tech") in ["Management", "Technical"]
+                       else None),
                 horizontal=True,
+                key="w_mgmt_tech",
             )
 
             work_style = st.radio(
                 "Work Style",
-                options=["— select —", "hard worker", "smart worker"],
-                index=["— select —", "hard worker", "smart worker"].index(
-                    st.session_state.answers.get("work_style", "— select —")
-                ),
+                options=["hard worker", "smart worker"],
+                index=(["hard worker", "smart worker"].index(st.session_state.answers["work_style"])
+                       if st.session_state.answers.get("work_style") in ["hard worker", "smart worker"]
+                       else None),
                 horizontal=True,
+                key="w_work_style",
             )
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -828,8 +844,8 @@ def main():
         if interested_subjects == "— select —": errors_2.append("Interested Subject")
         if career_area         == "— select —": errors_2.append("Interested Career Area")
         if company_type        == "— select —": errors_2.append("Preferred Company Type")
-        if mgmt_tech           == "— select —": errors_2.append("Orientation")
-        if work_style          == "— select —": errors_2.append("Work Style")
+        if mgmt_tech  is None:                  errors_2.append("Orientation")
+        if work_style is None:                  errors_2.append("Work Style")
 
         back, nxt = nav_buttons(step=2, can_next=True)
 
@@ -859,7 +875,11 @@ def main():
     elif step == 3:
         col_l, col_r = st.columns(2, gap="large")
 
-        yn_opts = ["— select —", "yes", "no"]
+        yn_opts = ["yes", "no"]
+
+        def yn_index(key):
+            val = st.session_state.answers.get(key)
+            return yn_opts.index(val) if val in yn_opts else None
 
         with col_l:
             st.markdown('<p class="section-label">🧩 Personal Traits</p>', unsafe_allow_html=True)
@@ -867,32 +887,37 @@ def main():
             self_learning = st.radio(
                 "Self-Learning Capability?",
                 options=yn_opts,
-                index=yn_opts.index(st.session_state.answers.get("self_learning", "— select —")),
+                index=yn_index("self_learning"),
                 horizontal=True,
+                key="w_self_learning",
             )
             extra_courses = st.radio(
                 "Completed Extra Courses?",
                 options=yn_opts,
-                index=yn_opts.index(st.session_state.answers.get("extra_courses", "— select —")),
+                index=yn_index("extra_courses"),
                 horizontal=True,
+                key="w_extra_courses",
             )
             senior_inputs = st.radio(
                 "Taken Inputs from Seniors?",
                 options=yn_opts,
-                index=yn_opts.index(st.session_state.answers.get("senior_inputs", "— select —")),
+                index=yn_index("senior_inputs"),
                 horizontal=True,
+                key="w_senior_inputs",
             )
             team_work = st.radio(
                 "Worked in Teams?",
                 options=yn_opts,
-                index=yn_opts.index(st.session_state.answers.get("team_work", "— select —")),
+                index=yn_index("team_work"),
                 horizontal=True,
+                key="w_team_work",
             )
             introvert = st.radio(
                 "Are You an Introvert?",
                 options=yn_opts,
-                index=yn_opts.index(st.session_state.answers.get("introvert", "— select —")),
+                index=yn_index("introvert"),
                 horizontal=True,
+                key="w_introvert",
             )
 
         with col_r:
@@ -918,12 +943,12 @@ def main():
 
         # Validate
         errors_3 = []
-        if self_learning == "— select —": errors_3.append("Self-Learning Capability")
-        if extra_courses == "— select —": errors_3.append("Completed Extra Courses")
-        if senior_inputs == "— select —": errors_3.append("Taken Inputs from Seniors")
-        if team_work     == "— select —": errors_3.append("Worked in Teams")
-        if introvert     == "— select —": errors_3.append("Are You an Introvert")
-        if books         == "— select —": errors_3.append("Favourite Type of Books")
+        if self_learning is None:            errors_3.append("Self-Learning Capability")
+        if extra_courses is None:            errors_3.append("Completed Extra Courses")
+        if senior_inputs is None:            errors_3.append("Taken Inputs from Seniors")
+        if team_work     is None:            errors_3.append("Worked in Teams")
+        if introvert     is None:            errors_3.append("Are You an Introvert")
+        if books         == "— select —":    errors_3.append("Favourite Type of Books")
 
         back, nxt = nav_buttons(step=3, can_next=True)
 
